@@ -4,6 +4,13 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 from yolos_demo import detect_laptop
 from trocr_demo import build_trocr_model, read_video
+import re
+import numpy as np
+
+
+def count_digits(s):
+    digits = re.findall(r'\d', s)
+    return len(digits)
 
 class VideoPlayer:
     def __init__(self, master):
@@ -148,7 +155,8 @@ class VideoPlayer:
     def read_text(self):
         for i, bbox in enumerate(self.bounding_boxes):
             result = read_video(self.video, self.trocr_model, self.trocr_processor, bbox, device='mps')
-            result_path = "result_%d.txt"%i
+            # Write to output file
+            result_path = "result_%d.txt" % i
             with open(result_path, "w") as f:
                 for res in result:
                     f.write('%s, %s\n' % (res[0], res[1]))
