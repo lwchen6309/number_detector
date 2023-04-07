@@ -3,9 +3,6 @@ import os
 from tkinter import *
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
-# Import additional modules
-import numpy as np
-
 
 # Global variables
 video_path = ""
@@ -16,32 +13,6 @@ regions = []
 root = Tk()
 root.title("Video Region Extractor")
 root.geometry("800x600")
-
-
-# Custom Canvas for handling mouse events and displaying preview
-class PreviewCanvas(Canvas):
-    def __init__(self, master=None, **kwargs):
-        super().__init__(master, **kwargs)
-        self.bind("<Button-1>", self.mouse_callback)
-        self.bind("<B1-Motion>", self.mouse_callback)
-        self.bind("<ButtonRelease-1>", self.mouse_callback)
-
-    def mouse_callback(self, event):
-        x, y = int(event.x / self.ratio), int(event.y / self.ratio)
-        event_type = None
-        if event.type == "4":  # Button Press
-            event_type = cv2.EVENT_LBUTTONDOWN
-        elif event.type == "5":  # Button Release
-            event_type = cv2.EVENT_LBUTTONUP
-        elif event.type == "6":  # Mouse Move
-            event_type = cv2.EVENT_MOUSEMOVE
-        mouse_callback(event_type, x, y, None, None)
-
-# Set up the preview window
-preview_canvas = PreviewCanvas(root, width=500, height=500)
-preview_canvas.grid(row=1, column=0, columnspan=3, padx=10, pady=10)
-
-
 
 # Select the video file
 def select_file():
@@ -55,6 +26,7 @@ def select_file():
     slider.configure(to=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)-1))
     slider.set(0)
     cap.release()
+
 
 # Update the preview frame
 def update_frame():
@@ -74,13 +46,13 @@ def update_frame():
         else:
             ratio = 500 / height
         resized_frame = cv2.resize(frame, (int(width*ratio), int(height*ratio)))
-        preview_canvas.ratio = ratio
         cv2image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGBA)
         img = Image.fromarray(cv2image)
         imgtk = ImageTk.PhotoImage(image=img)
-        preview_canvas.imgtk = imgtk
-        preview_canvas.create_image(0, 0, image=imgtk, anchor=NW)
+        preview_label.imgtk = imgtk
+        preview_label.configure(image=imgtk)
     cap.release()
+
 
 # Handle slider movement
 def slider_moved(value):
@@ -88,6 +60,32 @@ def slider_moved(value):
     frame_number = int(value)
     update_frame()
 
+# Handle mouse events on preview window
+def mouse_callback(event, x, y, flags, param):
+    global regions
+    if event == cv2.EVENT_LBUTTONDOWN:
+        # Start dragging a new region
+        regions.append((x, y, 0, 0))
+    elif event == cv2.EVENT_MOUSEMOVE:
+        # Update the last region being dragged
+        if len(regions) > 0:
+            x1, y1, _, _ = regions[-1]
+            w = x - x1
+            h = y - y1
+            regions[-1] = (x1, y1, w, h)
+            update_frame()
+    elif event == cv2.EVENT_LBUTTONUP:
+        # Stop dragging the last region
+        if len(regions) > 0:
+            x1, y1, w, h = regions[-1]
+            if w < 0:
+                x1 += w
+                w = abs(w)
+            if h < 0:
+                y1 += h
+                h = abs(h)
+            regions[-1] = (x1, y1, w, h)
+            update_frame()
 
 # Create the output directories
 def create_directories():
@@ -125,68 +123,8 @@ def update_frame():
         preview_label.configure(image=imgtk)
     cap.release()
 
-# Handle mouse events on preview window
-def mouse_callback(event, x, y, flags, param):
-    global regions
-    if event == cv2.EVENT_LBUTTONDOWN:
-        # Start dragging a new region
-        regions.append((x, y, 0, 0))
-    elif event == cv2.EVENT_MOUSEMOVE:
-        # Update the last region being dragged
-        if len(regions) > 0:
-            x1, y1, _, _ = regions[-1]
-            w = x - x1
-            h = y - y1
-            regions[-1] = (x1, y1, w, h)
-            update_frame()
-    elif event == cv2.EVENT_LBUTTONUP:
-        # Stop dragging the last region
-        if len(regions) > 0:
-            x1, y1, w, h = regions[-1]
-            if w < 0:
-                x1 += w
-                w = abs(w)
-            if h < 0:
-                y1 += h
-                h = abs(h)
-            regions[-1] = (x1, y1, w, h)
-            update_frame()
-
-# Extract the selected regions from the video and save as separate video files
-def extract_regions():
-    # Create video capture object and get video properties
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # Create video writer objects for all selected regions
-    output_path = os.path.splitext(video_path)[0]
-    writers = []
-    for j, (x, y, w, h) in enumerate(regions):
-        region_path = os.path.join(output_path, "region_" + str(j), "output.mp4")
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writer = cv2.VideoWriter(region_path, fourcc, fps, (w, h))
-        writers.append(writer)
-
-    # Process each frame of the video and write to the appropriate video writer
-    while(cap.isOpened()):
-        ret, frame = cap.read()
-        if ret == False:
-            break
-        for j, (x, y, w, h) in enumerate(regions):
-            region_frame = frame[y:y+h, x:x+w]
-            writers[j].write(region_frame)
-
-    # Release video capture and writer objects
-    cap.release()
-    for writer in writers:
-        writer.release()
-
-    messagebox.showinfo("Extraction Complete", "Regions extracted successfully!")
-
-
-
+                           
+                           
 # Set up the file path entry
 file_path_label = Label(root, text="Video File:")
 file_path_label.grid(row=0, column=0, padx=10, pady=10)
