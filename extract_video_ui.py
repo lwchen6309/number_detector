@@ -1,163 +1,161 @@
+import tkinter as tk
 import cv2
-import os
-from tkinter import *
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 from PIL import Image, ImageTk
+from yolos_demo import detect_laptop
+from trocr_demo import build_trocr_model, read_video
 
-# Global variables
-video_path = ""
-frame_number = 0
-regions = []
+class VideoPlayer:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("Video Player")
 
-# Set up the UI
-root = Tk()
+        # Create variables to store the video and bounding box information
+        self.video = None
+        self.bounding_boxes = []
+
+        # Create a canvas to display the video
+        self.canvas = tk.Canvas(self.master)
+        self.canvas.pack()
+        self.canvas_width = 800  # Change to desired width
+        self.canvas_height = 500  # Change to desired height
+        self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+
+        # Create a button to load the video
+        self.load_button = tk.Button(self.master, text="Load Video", command=self.load_video)
+        self.load_button.pack(side="left")
+
+        # Create a button to detect the laptop
+        self.yolos_button = tk.Button(self.master, text="Laptop Detect", command=self.create_bounding_box)
+        self.yolos_button.pack(side="left")
+
+        # Create a button to clear the bounding boxes
+        self.clear_bbox_button = tk.Button(self.master, text="Clear Bbox", command=self.clear_bounding_box)
+        self.clear_bbox_button.pack(side="left")
+
+        # Create a button to extract the bounding boxes into TrOCR
+        self.read_text_button = tk.Button(self.master, text="Read Text", command=self.read_text)
+        self.read_text_button.pack(side="left")
+
+        # Create a slider to control the preview time frame
+        self.slider = tk.Scale(self.master, from_=0, to=0, orient=tk.HORIZONTAL, command=self.update_preview)
+        self.slider.pack()
+
+        # Bind mouse events to the canvas
+        self.canvas.bind("<ButtonPress-1>", self.start_drag)
+        self.canvas.bind("<B1-Motion>", self.drag)
+        self.canvas.bind("<ButtonRelease-1>", self.end_drag)
+        
+        self.trocr_model, self.trocr_processor = build_trocr_model()
+
+    def load_video(self):
+        # Open a file dialog to select a video file
+        filetypes = (("Video files", "*.mp4"), ("All files", "*.*"))
+        filepath = filedialog.askopenfilename(title="Select a video file", filetypes=filetypes)
+
+        # Load the video using OpenCV
+        self.video = cv2.VideoCapture(filepath)
+
+        # Set the slider range to match the number of frames in the video
+        self.slider.config(to=int(self.video.get(cv2.CAP_PROP_FRAME_COUNT)))
+
+        # Display the first frame of the video on the canvas
+        self.show_frame()
+
+    def show_frame(self):
+        # Set the current frame of the video to the value of the slider
+        self.video.set(cv2.CAP_PROP_POS_FRAMES, int(self.slider.get()))
+
+        # Read the current frame from the video
+        ret, frame = self.video.read()
+
+        # Convert the frame from BGR to RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Resize the frame to fit on the canvas
+        height, width, _ = frame.shape
+        scale = min(self.canvas_width / width, self.canvas_height / height)
+        resized = cv2.resize(frame, (int(width * scale), int(height * scale)))
+
+        # Convert the resized frame to a PhotoImage object and display it on the canvas
+        self.photo = ImageTk.PhotoImage(image=Image.fromarray(resized))
+        self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
+
+        # Draw the bounding boxes on the canvas
+        for bbox in self.bounding_boxes:
+            x1, y1, x2, y2 = bbox
+            self.canvas.create_rectangle(x1 * scale, y1 * scale, x2 * scale, y2 * scale, outline="red")
+
+    def start_drag(self, event):
+        # Save the starting point of the drag
+        self.drag_start = (event.x, event.y)
+
+    def drag(self, event):
+        # Delete the previous bounding box
+        self.canvas.delete("bbox")
+
+        # Draw the new bounding box
+        x1, y1 = self.drag_start
+        x2, y2 = event.x, event.y
+        self.canvas.create_rectangle(x1, y1, x2, y2, outline="red", tags="bbox")
+
+    def end_drag(self, event):
+        # Save the bounding box coordinates
+        x1, y1 = self.drag_start
+        x2, y2 = event.x, event.y
+
+        # Read the current frame from the video
+        ret, frame = self.video.read()
+        height, width, _ = frame.shape
+        scale = min(self.canvas_width / width, self.canvas_height / height)
+        bbox = (x1, y1, x2, y2)
+        bbox = ([int(_b/scale) for _b in bbox])
+        self.bounding_boxes.append(bbox)
+
+        # Clear the canvas
+        self.canvas.delete("all")
+
+        # Update the preview
+        self.show_frame()
+
+    def update_preview(self, value):
+        # Set the current frame of the video to the value of the slider
+        self.video.set(cv2.CAP_PROP_POS_FRAMES, int(value))
+
+        # Update the preview
+        self.show_frame()
+
+    def run(self):
+        # Start the main event loop
+        self.master.mainloop()
+
+    def create_bounding_box(self):
+        # Detect the laptop bounding boxes and add them to the list of bounding boxes
+        self.video.set(cv2.CAP_PROP_POS_FRAMES, int(self.slider.get()))
+        _, frame = self.video.read()
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(image)
+        nms_boxes, nms_scores, labels = detect_laptop(image)
+        self.bounding_boxes = nms_boxes.int().tolist()
+        self.show_frame()
+
+    def clear_bounding_box(self):
+        # Detect the laptop bounding boxes and add them to the list of bounding boxes
+        self.bounding_boxes = []
+        self.canvas.delete("all")
+        self.show_frame()
+
+    def read_text(self):
+        for i, bbox in enumerate(self.bounding_boxes):
+            result = read_video(self.video, self.trocr_model, self.trocr_processor, bbox, device='mps')
+            result_path = "result_%d.txt"%i
+            with open(result_path, "w") as f:
+                for res in result:
+                    f.write('%s, %s\n' % (res[0], res[1]))
+
+
+root = tk.Tk()
 root.title("Video Region Extractor")
 root.geometry("800x600")
-
-# Select the video file
-def select_file():
-    global video_path, frame_number
-    video_path = filedialog.askopenfilename()
-    file_path_entry.delete(0, END)
-    file_path_entry.insert(0, video_path)
-    update_frame()
-    cap = cv2.VideoCapture(video_path)
-    frame_number = 0
-    slider.configure(to=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)-1))
-    slider.set(0)
-    cap.release()
-
-
-# Update the preview frame
-def update_frame():
-    global frame_number
-    cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    ret, frame = cap.read()
-    if ret == True:
-        # Draw selected regions on frame
-        for (x, y, w, h) in regions:
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        # Resize and display the frame
-        height, width, channels = frame.shape
-        ratio = 1
-        if width > height:
-            ratio = 500 / width
-        else:
-            ratio = 500 / height
-        resized_frame = cv2.resize(frame, (int(width*ratio), int(height*ratio)))
-        cv2image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGBA)
-        img = Image.fromarray(cv2image)
-        imgtk = ImageTk.PhotoImage(image=img)
-        preview_label.imgtk = imgtk
-        preview_label.configure(image=imgtk)
-    cap.release()
-
-
-# Handle slider movement
-def slider_moved(value):
-    global frame_number
-    frame_number = int(value)
-    update_frame()
-
-# Handle mouse events on preview window
-def mouse_callback(event, x, y, flags, param):
-    global regions
-    if event == cv2.EVENT_LBUTTONDOWN:
-        # Start dragging a new region
-        regions.append((x, y, 0, 0))
-    elif event == cv2.EVENT_MOUSEMOVE:
-        # Update the last region being dragged
-        if len(regions) > 0:
-            x1, y1, _, _ = regions[-1]
-            w = x - x1
-            h = y - y1
-            regions[-1] = (x1, y1, w, h)
-            update_frame()
-    elif event == cv2.EVENT_LBUTTONUP:
-        # Stop dragging the last region
-        if len(regions) > 0:
-            x1, y1, w, h = regions[-1]
-            if w < 0:
-                x1 += w
-                w = abs(w)
-            if h < 0:
-                y1 += h
-                h = abs(h)
-            regions[-1] = (x1, y1, w, h)
-            update_frame()
-
-# Create the output directories
-def create_directories():
-    output_path = os.path.splitext(video_path)[0]
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-    for i in range(len(regions)):
-        region_path = os.path.join(output_path, "region_" + str(i))
-        if not os.path.exists(region_path):
-            os.makedirs(region_path)
-
-# Extract the selected regions from the video and save as separate video files
-# Update the preview frame
-def update_frame():
-    global frame_number
-    cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    ret, frame = cap.read()
-    if ret == True:
-        # Draw selected regions on frame
-        for (x, y, w, h) in regions:
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        # Resize and display the frame
-        height, width, channels = frame.shape
-        ratio = 1
-        if width > height:
-            ratio = 500 / width
-        else:
-            ratio = 500 / height
-        resized_frame = cv2.resize(frame, (int(width*ratio), int(height*ratio)))
-        cv2image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGBA)
-        img = Image.fromarray(cv2image)
-        imgtk = ImageTk.PhotoImage(image=img)
-        preview_label.imgtk = imgtk
-        preview_label.configure(image=imgtk)
-    cap.release()
-
-                           
-                           
-# Set up the file path entry
-file_path_label = Label(root, text="Video File:")
-file_path_label.grid(row=0, column=0, padx=10, pady=10)
-file_path_entry = Entry(root, width=50)
-file_path_entry.grid(row=0, column=1, padx=10, pady=10)
-select_file_button = Button(root, text="Select", command=select_file)
-select_file_button.grid(row=0, column=2, padx=10, pady=10)
-
-# Set up the preview window
-preview_label = Label(root)
-preview_label.grid(row=1, column=0, columnspan=3, padx=10, pady=10)
-cv2.startWindowThread()
-cv2.setMouseCallback("Preview", mouse_callback)
-
-# Set up the slider
-slider_frame = Frame(root)
-slider_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=10)
-slider_label = Label(slider_frame, text="Frame Number:")
-slider_label.grid(row=0, column=0, sticky=W)
-slider_number_label = Label(slider_frame)
-slider_number_label.grid(row=0, column=1, padx=10, sticky=W)
-slider = Scale(slider_frame, from_=0, to=0, command=slider_moved, orient=HORIZONTAL, length=600, resolution=1, troughcolor="white", takefocus=1)
-slider.grid(row=0, column=2, sticky=W)
-
-
-# Set up the region selection buttons
-select_region_button = Button(root, text="Select Region", command=lambda:[create_directories(), extract_regions()])
-select_region_button.grid(row=3, column=0, padx=10, pady=10)
-clear_regions_button = Button(root, text="Clear Regions", command=lambda:[regions.clear(), update_frame()])
-clear_regions_button.grid(row=3, column=1, padx=10, pady=10)
-
-# Set up the extraction button
-extract_button = Button(root, text="Extract Regions", command=lambda:[create_directories(), extract_regions()])
-extract_button.grid(row=3, column=2, padx=10, pady=10)
-
-root.mainloop()
+app = VideoPlayer(root)
+app.run()

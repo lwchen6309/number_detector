@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import torch
 
 
 def estimate_gradient_threshold(cap):
@@ -31,53 +32,62 @@ def estimate_gradient_threshold(cap):
     grad_threshold = 5 * np.median(filtered_gradients)
     return filtered_gradients, grad_threshold
 
+def build_trocr_model():
+    # Load the TrOCR model
+    model_id = 'microsoft/trocr-base-str'
+    processor = TrOCRProcessor.from_pretrained(model_id)
+    model = VisionEncoderDecoderModel.from_pretrained(model_id)
+    return model, processor
 
-model_id = 'microsoft/trocr-base-str'
-processor = TrOCRProcessor.from_pretrained(model_id)
-model = VisionEncoderDecoderModel.from_pretrained(model_id)
-model = model.to('cuda')
-
-# Get a list of all subdirectories that start with "region_"
-basedir = './VID_20230131_103150_1_trunc'
-subdirs = sorted([os.path.join(basedir,f) for f in os.listdir(basedir) 
-                  if os.path.isdir(os.path.join(basedir,f)) and f.startswith("region_")])
-
-# Loop through each subdirectory and extract the text for each frame in that subdirectory
-for subdir in subdirs:
-    # Get the full path of the video file in the subdirectory
-    video_path = os.path.join(subdir, "output.mp4")
-    # Check if the video file exists
-    if not os.path.exists(video_path):
-        continue
+def read_video(cap, model, processor, bbox, time_step_in_second = 10, device='cpu'):
+    # Get the coordinates of the bounding box
+    x1, y1, x2, y2 = bbox
+    model = model.to(device)
     # Open the video file
-    cap = cv2.VideoCapture(video_path)
     # Get the number of frames in the video
     num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    filtered_gradients, grad_threshold = estimate_gradient_threshold(cap)
-    idx = np.where(filtered_gradients > grad_threshold)[0]
-    
-    # Loop through each frame and extract the text
+    # Infer once per 10 seconds of video
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    frame_step = int(time_step_in_second * frame_rate)
+    num_steps = int(num_frames / frame_step) + 1
     result = []
-    grads = []
-    prev_frame = None
-    for i in tqdm(idx):
+    for i in tqdm(range(num_steps)):
+        start_frame = i * frame_step
+        end_frame = min(num_frames, start_frame + frame_step)
+        if start_frame >= end_frame:
+            break
         # Set the video file position to the current frame index
-        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         ret, frame = cap.read()
         if ret == False:
             break
-        image = Image.fromarray(frame).convert("RGB")
+        image = Image.fromarray(frame[y1:y2, x1:x2, :]).convert("RGB")
         pixel_values = processor(image, return_tensors="pt").pixel_values
-        pixel_values = pixel_values.to('cuda')
+        pixel_values = pixel_values.to(device)
         generated_ids = model.generate(pixel_values, pad_token_id=2)
         generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        result.append(generated_text)
-    
+        result.append((start_frame / frame_rate, generated_text))
+    return result
+
+
+
+if __name__ == '__main__':
+    model, processor = build_trocr_model()
+    # Get a list of all subdirectories that start with "region_"
+    video_path = './slice_1.mp4'
+    # Open the video file
+    cap = cv2.VideoCapture(video_path)
+    # Get the size of the video
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    bbox = (0,0,width,height)
+    # Get the number of frames in the video
+    result = read_video(cap, model, processor, bbox, device='mps')
     # Close the video file
     cap.release()
+    basedir = '.'
     # Write the result to a text file in the same directory as the video file
-    result_path = os.path.join(subdir, "result.txt")
+    result_path = os.path.join(basedir, "result.txt")
     with open(result_path, "w") as f:
-        for i, text in zip(idx, result):
-            f.write('%s, %s\n'%(i, text))
+        for res in result:
+            f.write('%s, %s\n' % (res[0], res[1]))
