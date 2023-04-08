@@ -6,6 +6,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import torch
+import easyocr
 
 
 def estimate_gradient_threshold(cap):
@@ -39,7 +40,11 @@ def build_trocr_model():
     model = VisionEncoderDecoderModel.from_pretrained(model_id)
     return model, processor
 
-def read_video(cap, model, processor, bbox, time_step_in_second = 10, device='cpu'):
+def build_easyocr_model():
+    reader = easyocr.Reader(['ch_tra','en'], gpu=False)
+    return reader
+
+def read_video_trocr(cap, model, processor, bbox, time_step_in_second = 10, device='cpu'):
     # Get the coordinates of the bounding box
     x1, y1, x2, y2 = bbox
     model = model.to(device)
@@ -69,12 +74,41 @@ def read_video(cap, model, processor, bbox, time_step_in_second = 10, device='cp
         result.append((start_frame / frame_rate, generated_text))
     return result
 
+def read_video_easyocr(cap, reader, bbox, time_step_in_second = 10):
+    # Get the coordinates of the bounding box
+    x1, y1, x2, y2 = bbox
+    # Open the video file
+    # Get the number of frames in the video
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # Infer once per 10 seconds of video
+    frame_rate = cap.get(cv2.CAP_PROP_FPS)
+    frame_step = int(time_step_in_second * frame_rate)
+    num_steps = int(num_frames / frame_step) + 1
+    result = []
+    for i in tqdm(range(num_steps)):
+        start_frame = i * frame_step
+        end_frame = min(num_frames, start_frame + frame_step)
+        if start_frame >= end_frame:
+            break
+        # Set the video file position to the current frame index
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        ret, frame = cap.read()
+        if ret == False:
+            break
+        image = frame[y1:y2, x1:x2, :]
+        generated_text = reader.readtext(image)
+        if len(generated_text) > 0:
+            # generated_text = generated_text[0][1]
+            result.append((start_frame / frame_rate, generated_text))
+    return result
 
 
 if __name__ == '__main__':
-    model, processor = build_trocr_model()
+    # model, processor = build_trocr_model()
+    reader = easyocr.Reader(['ch_tra','en'], gpu=False)
     # Get a list of all subdirectories that start with "region_"
     video_path = './slice_1.mp4'
+    # video_path = './VID_20230131_103150_1_trunc.mp4'
     # Open the video file
     cap = cv2.VideoCapture(video_path)
     # Get the size of the video
@@ -82,7 +116,8 @@ if __name__ == '__main__':
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     bbox = (0,0,width,height)
     # Get the number of frames in the video
-    result = read_video(cap, model, processor, bbox, device='mps')
+    # result = read_video_trocr(cap, model, processor, bbox, device='mps')
+    result = read_video_easyocr(cap, reader, bbox, time_step_in_second=10)
     # Close the video file
     cap.release()
     basedir = '.'

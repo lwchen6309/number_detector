@@ -2,8 +2,8 @@ import tkinter as tk
 import cv2
 from tkinter import filedialog
 from PIL import Image, ImageTk
-from yolos_demo import detect_laptop
-from trocr_demo import build_trocr_model, read_video
+from yolos_utils import detect_laptop
+from ocr_utils import build_trocr_model, read_video_trocr, build_easyocr_model, read_video_easyocr
 import re
 import numpy as np
 
@@ -24,8 +24,8 @@ class VideoPlayer:
         # Create a canvas to display the video
         self.canvas = tk.Canvas(self.master)
         self.canvas.pack()
-        self.canvas_width = 800  # Change to desired width
-        self.canvas_height = 500  # Change to desired height
+        self.canvas_width = 1600  # Change to desired width
+        self.canvas_height = 800  # Change to desired height
         self.canvas.config(width=self.canvas_width, height=self.canvas_height)
 
         # Create a button to load the video
@@ -54,6 +54,7 @@ class VideoPlayer:
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         
         self.trocr_model, self.trocr_processor = build_trocr_model()
+        self.reader = build_easyocr_model()
 
     def load_video(self):
         # Open a file dialog to select a video file
@@ -153,17 +154,28 @@ class VideoPlayer:
         self.show_frame()
 
     def read_text(self):
-        for i, bbox in enumerate(self.bounding_boxes):
-            result = read_video(self.video, self.trocr_model, self.trocr_processor, bbox, device='mps')
-            # Write to output file
-            result_path = "result_%d.txt" % i
-            with open(result_path, "w") as f:
-                for res in result:
-                    f.write('%s, %s\n' % (res[0], res[1]))
+        width = int(self.video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        bbox = (0,0,width,height)
+        result = read_video_easyocr(self.video, self.reader, bbox)
+        # Write to output file
+        result_path = "result_%d.txt"
+        with open(result_path, "w") as f:
+            for res in result:
+                f.write('%s, %s\n' % (res[0], res[1]))
+        # for i, bbox in enumerate(self.bounding_boxes):
+        #     # result = read_video_trocr(self.video, self.trocr_model, self.trocr_processor, bbox, device='mps')
+
+        #     result = read_video_easyocr(self.video, self.reader, bbox)
+        #     # Write to output file
+        #     result_path = "result_%d.txt" % i
+        #     with open(result_path, "w") as f:
+        #         for res in result:
+        #             f.write('%s, %s\n' % (res[0], res[1]))
 
 
 root = tk.Tk()
 root.title("Video Region Extractor")
-root.geometry("800x600")
+root.geometry("1600x1000")
 app = VideoPlayer(root)
 app.run()
